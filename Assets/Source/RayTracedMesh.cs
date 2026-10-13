@@ -5,7 +5,6 @@ using UnityEngine;
 public class RayTracedMesh : MonoBehaviour
 {
     public RayTracingMaterial material;
-    public MeshRenderer meshRenderer;
     public MeshFilter meshFilter;
     public int triangleCount;
 
@@ -20,7 +19,8 @@ public class RayTracedMesh : MonoBehaviour
         public Vector3 normalA, normalB, normalC;
     }
     
-    public Triangle[] triangles;
+    private Triangle[] triangles;
+    public Triangle[] Triangles => triangles;
 
     public Vector3 boundsMin;
     public Vector3 boundsMax;
@@ -31,12 +31,6 @@ public class RayTracedMesh : MonoBehaviour
         {
             materialInitFlag = true;
             material.SetDefaultValues();
-        }
-
-        meshRenderer = GetComponent<MeshRenderer>();
-        if (meshRenderer != null)
-        {
-            meshRenderer.sharedMaterial.color = material.color;
         }
         
         meshFilter = GetComponent<MeshFilter>();

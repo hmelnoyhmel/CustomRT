@@ -36,9 +36,18 @@ struct MeshInfo
 {
     uint firstTriangleIndex;
     uint numTriangles;
+    uint firstNodeIndex;
     float3 boundsMin;
     float3 boundsMax;
     RayTracingMaterial material;
+};
+
+struct BVHNode
+{
+    float3 boundsMin;
+    float3 boundsMax;
+    uint startIndex;
+    uint triangleCount;
 };
 
 #endif

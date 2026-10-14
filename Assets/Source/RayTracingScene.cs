@@ -11,6 +11,7 @@ namespace Source
         {
             public int firstTriangleIndex;
             public int numTriangles;
+            public int firstNodeIndex;
             public Vector3 boundsMin;
             public Vector3 boundsMax;
             public RayTracingMaterial material;
@@ -27,11 +28,13 @@ namespace Source
 
         private RayTracedMesh.Triangle[] triangles;
         private MeshInfo[] meshes;
-        
-        private bool sceneDirty = true;
+        private BVH.Node[] bvhNodes;
         
         private GraphicsBuffer trianglesBuffer;
         private GraphicsBuffer allMeshInfoBuffer;
+        private GraphicsBuffer bvhNodesBuffer;
+        
+        private bool sceneDirty = true;
         
         public void BuildSceneData()
         {
@@ -45,6 +48,7 @@ namespace Source
             material.SetInt("NumMeshes", meshes.Length);
             material.SetBuffer("Triangles", trianglesBuffer);
             material.SetBuffer("AllMeshInfo", allMeshInfoBuffer);
+            material.SetBuffer("BVHNodes", bvhNodesBuffer);
         }
         
         public void MarkAsDirty()
@@ -59,6 +63,9 @@ namespace Source
             
             allMeshInfoBuffer?.Dispose();
             allMeshInfoBuffer = null;
+            
+            bvhNodesBuffer?.Dispose();
+            bvhNodesBuffer = null;
         }
         
         private bool TryCreateMeshes()
@@ -68,28 +75,33 @@ namespace Source
         
             sceneDirty = true;
             var tris =  new List<RayTracedMesh.Triangle>();
+            var nodes = new List<BVH.Node>();
             meshes = new MeshInfo[meshObjects.Length];
             previousMeshStates = new Dictionary<RayTracedMesh, MeshState>();
         
             for (int i = 0; i < meshObjects.Length; i++)
             {
-                meshObjects[i].SetupGeometry();
+                var mesh = meshObjects[i];
+                mesh.SetupGeometry();
                 var count = tris.Count;
                 meshes[i] = new MeshInfo()
                 {
                     firstTriangleIndex = count,
-                    numTriangles = meshObjects[i].triangleCount,
-                    boundsMin = meshObjects[i].boundsMin,
-                    boundsMax = meshObjects[i].boundsMax,
-                    material = meshObjects[i].material
+                    numTriangles = mesh.triangleCount,
+                    firstNodeIndex = nodes.Count,
+                    boundsMin = mesh.boundsMin,
+                    boundsMax = mesh.boundsMax,
+                    material = mesh.material
                 };
-                tris.AddRange(meshObjects[i].Triangles);
+                tris.AddRange(mesh.Triangles);
+                nodes.AddRange(mesh.Bvh.Tree);
             
-                var meshState = CreateMeshState(meshObjects[i]);
-                previousMeshStates.TryAdd(meshObjects[i], meshState);
+                var meshState = CreateMeshState(mesh);
+                previousMeshStates.TryAdd(mesh, meshState);
             }
 
             triangles = tris.ToArray();
+            bvhNodes = nodes.ToArray();
             return true;
         }
         
@@ -99,6 +111,7 @@ namespace Source
             if (sceneDirty) return true;
             if (triangles == null) return true;
             if (meshes == null) return true;
+            if (bvhNodes == null) return true;
         
             if (meshObjects.Length != previousMeshStates.Count) return true;
         
@@ -120,10 +133,14 @@ namespace Source
         private void UploadSceneData(bool needsUpload)
         {
             if (!needsUpload) return;
+            
             ResizeBuffer(ref trianglesBuffer, triangles.Length, 72);
-            ResizeBuffer(ref allMeshInfoBuffer, meshes.Length, 92);
+            ResizeBuffer(ref allMeshInfoBuffer, meshes.Length, 96);
+            ResizeBuffer(ref bvhNodesBuffer, bvhNodes.Length, 32);
+            
             trianglesBuffer.SetData(triangles);
             allMeshInfoBuffer.SetData(meshes);
+            bvhNodesBuffer.SetData(bvhNodes);
         }
         
         private void ResizeBuffer(ref GraphicsBuffer buffer, int elementCount, int stride)

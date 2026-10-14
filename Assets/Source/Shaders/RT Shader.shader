@@ -22,6 +22,7 @@ Shader "Custom/RT Shader"
             
             #pragma vertex Vert
             #pragma fragment Frag
+            #pragma target 4.5
             
             float4 ViewParams;
             float4x4 CamLocalToWorld;

@@ -22,6 +22,14 @@ public class RayTracedMesh : MonoBehaviour
     private Triangle[] triangles;
     public Triangle[] Triangles => triangles;
 
+    private BVH bvh;
+    public BVH Bvh => bvh;
+    
+#if UNITY_EDITOR
+    public static bool CollectStats { get; set; } = true;
+    public BVHStats? Stats { get; private set; }
+#endif
+
     public Vector3 boundsMin;
     public Vector3 boundsMax;
     
@@ -91,5 +99,23 @@ public class RayTracedMesh : MonoBehaviour
             boundsMax = Vector3.Max(boundsMax, worldPositions[i]);
         }
 
+#if UNITY_EDITOR
+        var timer = CollectStats
+            ? System.Diagnostics.Stopwatch.StartNew()
+            : null;
+#endif
+        
+        bvh = new BVH(triangles);
+        
+#if UNITY_EDITOR
+        if (timer != null)
+        {
+            timer.Stop();
+            Stats = BVHStats.Collect(bvh, timer.Elapsed.TotalMilliseconds);
+            return;
+        }
+        
+        Stats = null;
+#endif
     }
 }

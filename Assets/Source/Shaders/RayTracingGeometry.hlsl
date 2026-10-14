@@ -5,6 +5,7 @@
 
 StructuredBuffer<Triangle> Triangles;
 StructuredBuffer<MeshInfo> AllMeshInfo;
+StructuredBuffer<BVHNode> BVHNodes;
 int NumMeshes;
 
 // Möller–Trumbore algorithm
@@ -54,7 +55,7 @@ bool RayBoundingBox(Ray ray, float3 boxMin, float3 boxMax, float3 inverseRayDire
     return tNear < maxDistance && tNear <= tFar && tFar >= 0; 
 };
 
-HitInfo CalculateRayCollision(Ray ray)
+HitInfo CalculateRayCollisionFullTraversal(Ray ray)
 {
     HitInfo closestHit = (HitInfo)0;
     closestHit.distance = 1.#INF; // if ray didn't hit, the distance is inf
@@ -82,6 +83,63 @@ HitInfo CalculateRayCollision(Ray ray)
             }
         }
     }
+    return closestHit;
+}
+
+HitInfo CalculateRayCollision(Ray ray)
+{
+    HitInfo closestHit = (HitInfo)0;
+    closestHit.distance = 1.#INF;
+
+    float3 inverseRayDirection = 1.0 / ray.dir;
+
+    for (int meshIndex = 0; meshIndex < NumMeshes; meshIndex++)
+    {
+        MeshInfo meshInfo = AllMeshInfo[meshIndex];
+        if (meshInfo.numTriangles == 0) continue;
+
+        // shortcut: supports maxDepth <= 31;
+        // increase stack capacity if the depth limit grows.
+        uint stack[32];
+        uint stackCount = 1;
+        stack[0] = meshInfo.firstNodeIndex;
+
+        [loop]
+        while (stackCount > 0)
+        {
+            uint nodeIndex = stack[--stackCount];
+            BVHNode node = BVHNodes[nodeIndex];
+
+            if (!RayBoundingBox(ray,node.boundsMin,node.boundsMax,inverseRayDirection,closestHit.distance))
+                continue;
+            
+
+            if (node.triangleCount == 0)
+            {
+                uint firstChildIndex = meshInfo.firstNodeIndex + node.startIndex;
+
+                stack[stackCount++] = firstChildIndex + 1;
+                stack[stackCount++] = firstChildIndex;
+                continue;
+            }
+
+            uint firstTriangleIndex = meshInfo.firstTriangleIndex + node.startIndex;
+
+            [loop]
+            for (uint i = 0; i < node.triangleCount; i++)
+            {
+                Triangle tri = Triangles[firstTriangleIndex + i];
+                HitInfo hitInfo = RayTriangle(ray, tri, closestHit.distance);
+
+                if (hitInfo.didHit && hitInfo.distance < closestHit.distance)
+                {
+                    closestHit = hitInfo;
+                    closestHit.material = meshInfo.material;
+                }
+            }
+        }
+    }
+
     return closestHit;
 }
 

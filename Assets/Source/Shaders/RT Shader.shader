@@ -4,7 +4,10 @@ Shader "Custom/RT Shader"
     {
         HLSLINCLUDE
         #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+        
+        #define USE_FULL_PRECISION_BLIT_TEXTURE
         #include "Packages/com.unity.render-pipelines.core/Runtime/Utilities/Blit.hlsl"
+        
         #include "RayTracingTypes.hlsl"
         #include "RayTracingGeometry.hlsl"
         #include "RayTracingSampling.hlsl"
@@ -12,7 +15,7 @@ Shader "Custom/RT Shader"
 
         Tags { "RenderType"="Opaque" }
         LOD 100
-        ZWrite Off Cull Off
+        ZWrite Off Cull Off ZTest Always
         
         Pass
         {
@@ -26,6 +29,9 @@ Shader "Custom/RT Shader"
             
             float4 ViewParams;
             float4x4 CamLocalToWorld;
+            
+            int AccumulatedFrames;
+			uint FrameIndex;
             
             int MaxBounceCount;
             int NumRaysPerPixel;
@@ -90,12 +96,25 @@ Shader "Custom/RT Shader"
 				return incomingLight;
 			}
             
+            float4 ApplyAccumulation(float3 pixelColor, float2 uv)
+			{
+				if (AccumulatedFrames == 0)
+					return float4(pixelColor, 1);
+            	
+				float3 historyColor = SAMPLE_TEXTURE2D_X_LOD(_BlitTexture, sampler_PointClamp, uv, 0).rgb;
+            	
+				float weight = 1.0 / (AccumulatedFrames + 1.0);
+				float3 accumulatedColor = lerp(historyColor, pixelColor, weight);
+            	
+				return float4(accumulatedColor, 1);
+			}
+            
             float4 Frag (Varyings input) : SV_Target
             {
             	uint2 numPixels = _ScreenParams.xy;
             	uint2 pixelCoord = input.texcoord * numPixels;
             	uint pixelIndex = pixelCoord.y * numPixels.x + pixelCoord.x;
-            	uint rngState = pixelIndex;
+            	uint rngState = pixelIndex + FrameIndex * 747796405u;
             	
                 // calculate current pixel on the cam projection plane
                 float3 viewPointLocal = float3(input.texcoord - 0.5, 1) * ViewParams;
@@ -107,7 +126,7 @@ Shader "Custom/RT Shader"
             	
             	HitInfo firstHit = CalculateRayCollision(ray);
             	if (!firstHit.didHit) 
-            		return float4(GetEnvironmentLight(ray), 1);
+            		return ApplyAccumulation(GetEnvironmentLight(ray), input.texcoord);
             	
             	float3 totalIncomingLight = 0;
             	for (int rayIndex = 0; rayIndex < NumRaysPerPixel; rayIndex++)
@@ -116,7 +135,7 @@ Shader "Custom/RT Shader"
             	}
             	
                 float3 pixelColor = totalIncomingLight / NumRaysPerPixel;
-                return float4(pixelColor, 1);
+                return ApplyAccumulation(pixelColor, input.texcoord);
             }
             
             ENDHLSL

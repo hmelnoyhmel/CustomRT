@@ -42,7 +42,7 @@ HitInfo RayTriangle(Ray ray, Triangle tri, float maxDistance)
     return hitInfo;
 }
 
-bool RayBoundingBox(Ray ray, float3 boxMin, float3 boxMax, float3 inverseRayDirection, float maxDistance)
+bool RayBoundingBox(Ray ray, float3 boxMin, float3 boxMax, float3 inverseRayDirection, float maxDistance, out float entryDistance)
 {
     float3 tMin = (boxMin - ray.origin) * inverseRayDirection;
     float3 tMax = (boxMax - ray.origin) * inverseRayDirection;
@@ -50,6 +50,8 @@ bool RayBoundingBox(Ray ray, float3 boxMin, float3 boxMax, float3 inverseRayDire
     float3 t2 = max(tMin, tMax);
     float tNear = max(max(t1.x, t1.y), t1.z);
     float tFar = min(min(t2.x, t2.y), t2.z);
+    
+    entryDistance = max(tNear, 0.0);
     
     // check for tFar >= 0 so ray doesn't consider objects behind camera
     return tNear < maxDistance && tNear <= tFar && tFar >= 0; 
@@ -63,11 +65,13 @@ HitInfo CalculateRayCollisionFullTraversal(Ray ray)
     // calculate once before loop, because each individual ray is the same for all meshes 
     // (but ray bounces will require recalculation)
     float3 inverseRayDirection = 1.0 / ray.dir; 
+    float meshEntryDistance;
     
     for (int meshIndex = 0; meshIndex < NumMeshes; meshIndex++)
     {
         MeshInfo meshInfo = AllMeshInfo[meshIndex];
-        if (!RayBoundingBox(ray, meshInfo.boundsMin, meshInfo.boundsMax, inverseRayDirection, closestHit.distance))
+        if (!RayBoundingBox(ray, meshInfo.boundsMin, meshInfo.boundsMax, 
+            inverseRayDirection, closestHit.distance, meshEntryDistance))
             continue;
 
         for (int i = 0; i < meshInfo.numTriangles; i++)
@@ -97,29 +101,93 @@ HitInfo CalculateRayCollision(Ray ray)
     {
         MeshInfo meshInfo = AllMeshInfo[meshIndex];
         if (meshInfo.numTriangles == 0) continue;
+        
+        uint rootIndex = meshInfo.firstNodeIndex;
+        BVHNode root = BVHNodes[rootIndex];
 
+        float rootEntryDistance;
+
+        if (!RayBoundingBox(ray, root.boundsMin,root.boundsMax,inverseRayDirection,closestHit.distance, rootEntryDistance))
+            continue;
+        
         // shortcut: supports maxDepth <= 31;
         // increase stack capacity if the depth limit grows.
         uint stack[32];
+        float stackEntryDistances[32];
         uint stackCount = 1;
-        stack[0] = meshInfo.firstNodeIndex;
-
+        stack[0] = rootIndex;
+        stackEntryDistances[0] = rootEntryDistance;
+        
         [loop]
         while (stackCount > 0)
         {
-            uint nodeIndex = stack[--stackCount];
-            BVHNode node = BVHNodes[nodeIndex];
-
-            if (!RayBoundingBox(ray,node.boundsMin,node.boundsMax,inverseRayDirection,closestHit.distance))
-                continue;
+            stackCount--;
             
+            uint nodeIndex = stack[stackCount];
+            float entryDistance = stackEntryDistances[stackCount];
+            if (entryDistance >= closestHit.distance) continue;
+            
+            BVHNode node = BVHNodes[nodeIndex];
 
             if (node.triangleCount == 0)
             {
-                uint firstChildIndex = meshInfo.firstNodeIndex + node.startIndex;
+                uint leftIndex = meshInfo.firstNodeIndex + node.startIndex;
+                uint rightIndex = leftIndex + 1;
 
-                stack[stackCount++] = firstChildIndex + 1;
-                stack[stackCount++] = firstChildIndex;
+                BVHNode leftNode = BVHNodes[leftIndex];
+                BVHNode rightNode = BVHNodes[rightIndex];
+
+                float leftEntryDistance;
+                float rightEntryDistance;
+
+                bool hitLeft = RayBoundingBox(
+                    ray,
+                    leftNode.boundsMin,
+                    leftNode.boundsMax,
+                    inverseRayDirection,
+                    closestHit.distance,
+                    leftEntryDistance);
+
+                bool hitRight = RayBoundingBox(
+                    ray,
+                    rightNode.boundsMin,
+                    rightNode.boundsMax,
+                    inverseRayDirection,
+                    closestHit.distance,
+                    rightEntryDistance);
+
+                if (hitLeft && hitRight)
+                {
+                    bool leftIsNear = leftEntryDistance <= rightEntryDistance;
+
+                    uint nearIndex = leftIsNear ? leftIndex : rightIndex;
+                    uint farIndex = leftIsNear ? rightIndex : leftIndex;
+
+                    stack[stackCount] = farIndex;
+                    stackEntryDistances[stackCount] = leftIsNear ? rightEntryDistance : leftEntryDistance;
+                    stackCount++;
+
+                    stack[stackCount] = nearIndex;
+                    stackEntryDistances[stackCount] = leftIsNear ? leftEntryDistance : rightEntryDistance;
+                    stackCount++;
+                }
+                else
+                {
+                    if (hitLeft)
+                    {
+                        stack[stackCount] = leftIndex;
+                        stackEntryDistances[stackCount] = leftEntryDistance;
+                        stackCount++;
+                    }
+
+                    if (hitRight)
+                    {
+                        stack[stackCount] = rightIndex;
+                        stackEntryDistances[stackCount] = rightEntryDistance;
+                        stackCount++;
+                    }
+                }
+
                 continue;
             }
 

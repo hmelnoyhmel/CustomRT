@@ -48,14 +48,8 @@ public class BVH
         var node = tree[nodeIndex];
         if (node.triangleCount <= 1) return;
         if (depth >= maxDepth) return;
-        
-        var size = node.boundsMax - node.boundsMin;
 
-        int axis = 0;
-        if (size.y > size[axis]) axis = 1;
-        if (size.z > size[axis]) axis = 2;
-
-        float splitPosition = (node.boundsMin[axis] + node.boundsMax[axis]) * 0.5f;
+        if (!TryFindBestSplit(triangles, node, out var axis, out var splitPosition)) return;
 
         int leftCount = 0;
         int endIndex = node.startIndex + node.triangleCount;
@@ -105,5 +99,107 @@ public class BVH
     private static Vector3 GetTriangleCenter(RayTracedMesh.Triangle triangle)
     {
         return (triangle.posA + triangle.posB + triangle.posC) / 3f;
+    }
+    
+    private static float GetSurfaceArea(Vector3 boundsMin, Vector3 boundsMax)
+    {
+        var size = boundsMax - boundsMin;
+        var area = 2f * ((size.x * size.y) + (size.y * size.z) + (size.z * size.x));
+        return area;
+    }
+    
+    private static float EvaluateSplitCost(
+        RayTracedMesh.Triangle[] triangles,
+        Node node,
+        int axis,
+        float splitPosition)
+    {
+        float parentArea = GetSurfaceArea(node.boundsMin, node.boundsMax);
+        
+        if (parentArea <= 0f) return float.PositiveInfinity;
+
+        var leftMin = Vector3.positiveInfinity;
+        var leftMax = Vector3.negativeInfinity;
+        var rightMin = Vector3.positiveInfinity;
+        var rightMax = Vector3.negativeInfinity;
+
+        int leftCount = 0;
+        int rightCount = 0;
+        int endIndex = node.startIndex + node.triangleCount;
+
+        for (int i = node.startIndex; i < endIndex; i++)
+        {
+            var triangle = triangles[i];
+
+            var center = GetTriangleCenter(triangle);
+            var triangleMin = GetTriangleMin(triangle);
+            var triangleMax = GetTriangleMax(triangle);
+
+            if (center[axis] < splitPosition)
+            {
+                leftCount++;
+                leftMin = Vector3.Min(leftMin, triangleMin);
+                leftMax = Vector3.Max(leftMax, triangleMax);
+            }
+            else
+            {
+                rightCount++;
+                rightMin = Vector3.Min(rightMin, triangleMin);
+                rightMax = Vector3.Max(rightMax, triangleMax);
+            }
+        }
+
+        if (leftCount == 0 || rightCount == 0) return float.PositiveInfinity;
+
+        float leftArea = GetSurfaceArea(leftMin, leftMax);
+        float rightArea = GetSurfaceArea(rightMin, rightMax);
+
+        float weightedArea = (leftArea * leftCount) + (rightArea * rightCount);
+
+        return 1f + weightedArea / parentArea;
+    }
+    
+    private static bool TryFindBestSplit(
+        RayTracedMesh.Triangle[] triangles,
+        Node node,
+        out int axis,
+        out float splitPosition)
+    {
+        const int candidateCount = 5;
+
+        axis = -1;
+        splitPosition = 0f;
+
+        float bestCost = node.triangleCount;
+        var size = node.boundsMax - node.boundsMin;
+
+        for (int candidateAxis = 0; candidateAxis < 3; candidateAxis++)
+        {
+            if (size[candidateAxis] <= 0f) continue;
+
+            for (int i = 1; i <= candidateCount; i++)
+            {
+                float fraction = (float)i / (candidateCount + 1);
+
+                float position =
+                    node.boundsMin[candidateAxis] +
+                    size[candidateAxis] * fraction;
+
+                float cost = EvaluateSplitCost(
+                    triangles,
+                    node,
+                    candidateAxis,
+                    position);
+
+                if (cost < bestCost)
+                {
+                    bestCost = cost;
+                    axis = candidateAxis;
+                    splitPosition = position;
+                }
+            }
+        }
+
+        return axis >= 0;
     }
 }

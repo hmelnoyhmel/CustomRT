@@ -36,11 +36,13 @@ namespace Source
         
         private bool sceneDirty = true;
         
-        public void BuildSceneData()
+        public bool TryBuildSceneData()
         {
             var rebuiltMeshes = TryCreateMeshes();
             UploadSceneData(rebuiltMeshes);
             sceneDirty = false;
+            
+            return rebuiltMeshes;
         }
         
         public void BindSceneData(Material material)

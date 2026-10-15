@@ -22,7 +22,7 @@ MonoBehaviour:
   m_Version: 1
   useShaderInSceneView: 1
   MaxBounceCount: 4
-  NumRaysPerPixel: 16
+  NumRaysPerPixel: 8
   sunFocus: 100
   SkyColorHorizon: {r: 0, g: 0.23529412, b: 0.34901962, a: 1}
   SkyColorZenith: {r: 0.2901961, g: 0.7019608, b: 0.99215686, a: 1}

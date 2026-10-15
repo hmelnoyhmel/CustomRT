@@ -4,6 +4,7 @@ using UnityEngine.Rendering.Universal;
 
 public class RayTracingRendererFeature : FullScreenPassRendererFeature
 {
+    [SerializeField] private bool useAccumulation;
     [SerializeField] private bool useShaderInSceneView;
     [SerializeField] private int MaxBounceCount = 4;
     [SerializeField] private int NumRaysPerPixel = 1;
@@ -15,7 +16,7 @@ public class RayTracingRendererFeature : FullScreenPassRendererFeature
     [SerializeField] private Color GroundColor = Color.gray;
     
     private RayTracingScene scene;
-    
+    private RayTracingAccumulationPass accumulationPass;
     
     void UpdateSettings(Camera cam)
     {
@@ -31,8 +32,12 @@ public class RayTracingRendererFeature : FullScreenPassRendererFeature
 
     public override void Create()
     {
+        accumulationPass?.Dispose();
+        accumulationPass = new RayTracingAccumulationPass();
+        
         scene?.Dispose();
         scene = new RayTracingScene();
+        
         base.Create();
     }
 
@@ -47,13 +52,31 @@ public class RayTracingRendererFeature : FullScreenPassRendererFeature
             if (!useShaderInSceneView) return;
         }
         
+        if (passIndex < 0 || passIndex >= passMaterial.passCount)
+            return;
         
         UpdateSettings(cam);
-        scene.BuildSceneData();
+        
+        bool sceneChanged = scene.TryBuildSceneData();
         scene.BindSceneData(passMaterial);
         SetupSunAndSky();
-        
-        base.AddRenderPasses(renderer, ref renderingData);
+
+        if (sceneChanged)
+            accumulationPass.ResetHistory();
+
+        passMaterial.SetInt("AccumulatedFrames", 0);
+        passMaterial.SetInt("FrameIndex", 0);
+
+        if (!useAccumulation)
+        {
+            accumulationPass.Dispose();
+            base.AddRenderPasses(renderer, ref renderingData);
+            return;
+        }
+
+        accumulationPass.renderPassEvent = (RenderPassEvent)injectionPoint;
+        accumulationPass.Setup(passMaterial, passIndex);
+        renderer.EnqueuePass(accumulationPass);
     }
     
     void SetupSunAndSky()
@@ -82,8 +105,12 @@ public class RayTracingRendererFeature : FullScreenPassRendererFeature
 
     protected override void Dispose(bool disposing)
     {
+        accumulationPass?.Dispose();
+        accumulationPass = null;
+        
         scene?.Dispose();
         scene = null;
+        
         base.Dispose(disposing);
     }
 }

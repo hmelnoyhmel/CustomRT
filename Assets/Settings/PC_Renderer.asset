@@ -20,6 +20,7 @@ MonoBehaviour:
   passIndex: 0
   bindDepthStencilAttachment: 0
   m_Version: 1
+  useAccumulation: 1
   useShaderInSceneView: 1
   MaxBounceCount: 4
   NumRaysPerPixel: 8

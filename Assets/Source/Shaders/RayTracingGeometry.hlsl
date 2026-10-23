@@ -110,7 +110,7 @@ HitInfo CalculateRayCollision(Ray ray)
         if (!RayBoundingBox(ray, root.boundsMin,root.boundsMax,inverseRayDirection,closestHit.distance, rootEntryDistance))
             continue;
         
-        // shortcut: supports maxDepth <= 31;
+        // supports maxDepth <= 31;
         // increase stack capacity if the depth limit grows.
         uint stack[32];
         float stackEntryDistances[32];

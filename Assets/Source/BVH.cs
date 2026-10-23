@@ -13,55 +13,75 @@ public class BVH
     private List<Node> tree = new List<Node>();
     public IReadOnlyList<Node> Tree => tree;
     
+    private struct TriangleBuildData
+    {
+        public Vector3 boundsMin;
+        public Vector3 boundsMax;
+        public Vector3 center;
+    }
+    
     public BVH(RayTracedMesh.Triangle[] triangles, int maxDepth = 12)
     {
         if (triangles == null || triangles.Length == 0) return;
         
-        tree.Add(CreateLeaf(triangles, 0, triangles.Length));
-        SplitNode(triangles, 0, 0, maxDepth);
+        var buildData = new TriangleBuildData[triangles.Length];
+        
+        for (int i = 0; i < triangles.Length; i++)
+        {
+            buildData[i] = new TriangleBuildData
+            {
+                boundsMin = GetTriangleMin(triangles[i]),
+                boundsMax = GetTriangleMax(triangles[i]),
+                center = GetTriangleCenter(triangles[i])
+            };
+        }
+        
+        tree.Add(CreateLeaf(buildData, 0, triangles.Length));
+        SplitNode(triangles, buildData, 0, 0, maxDepth);
     }
 
-    private static Node CreateLeaf(RayTracedMesh.Triangle[] triangles, int startIndex, int triangleCount)
+    private static Node CreateLeaf(TriangleBuildData[] buildData, int startIndex, int triangleCount)
     {
         var leaf = new Node()
         {
             startIndex = startIndex,
             triangleCount = triangleCount,
-            boundsMin = triangles[startIndex].posA,
-            boundsMax = triangles[startIndex].posA
+            boundsMin = buildData[startIndex].boundsMin,
+            boundsMax = buildData[startIndex].boundsMax
         };
         
         var endIndex = startIndex + triangleCount;
 
         for (int i = startIndex; i < endIndex; i++)
         {
-            leaf.boundsMin = Vector3.Min(leaf.boundsMin, GetTriangleMin(triangles[i]));
-            leaf.boundsMax = Vector3.Max(leaf.boundsMax, GetTriangleMax(triangles[i]));
+            leaf.boundsMin = Vector3.Min(leaf.boundsMin, buildData[i].boundsMin);
+            leaf.boundsMax = Vector3.Max(leaf.boundsMax, buildData[i].boundsMax);
         }
 
         return leaf;
     }
     
     // request description from codex
-    private void SplitNode(RayTracedMesh.Triangle[] triangles, int nodeIndex, int depth, int maxDepth)
+    private void SplitNode(RayTracedMesh.Triangle[] triangles, TriangleBuildData[] buildData, int nodeIndex, int depth, int maxDepth)
     {
         var node = tree[nodeIndex];
         if (node.triangleCount <= 1) return;
         if (depth >= maxDepth) return;
 
-        if (!TryFindBestSplit(triangles, node, out var axis, out var splitPosition)) return;
+        if (!TryFindBestSplit(buildData, node, out var axis, out var splitPosition)) return;
 
         int leftCount = 0;
         int endIndex = node.startIndex + node.triangleCount;
 
         for (int i = node.startIndex; i < endIndex; i++)
         {
-            var center = GetTriangleCenter(triangles[i]);
+            var center = buildData[i].center;
 
             if (center[axis] >= splitPosition) continue;
 
             int swapIndex = node.startIndex + leftCount;
             (triangles[swapIndex], triangles[i]) = (triangles[i], triangles[swapIndex]);
+            (buildData[swapIndex], buildData[i]) = (buildData[i], buildData[swapIndex]);
             leftCount++;
         }
 
@@ -71,15 +91,15 @@ public class BVH
 
         int firstChildIndex = tree.Count;
 
-        tree.Add(CreateLeaf(triangles, node.startIndex, leftCount));
-        tree.Add(CreateLeaf(triangles, node.startIndex + leftCount, rightCount));
+        tree.Add(CreateLeaf(buildData, node.startIndex, leftCount));
+        tree.Add(CreateLeaf(buildData, node.startIndex + leftCount, rightCount));
 
         node.startIndex = firstChildIndex;
         node.triangleCount = 0;
 
         tree[nodeIndex] = node;
-        SplitNode(triangles, firstChildIndex, depth + 1, maxDepth);
-        SplitNode(triangles, firstChildIndex + 1, depth + 1, maxDepth);
+        SplitNode(triangles, buildData, firstChildIndex, depth + 1, maxDepth);
+        SplitNode(triangles, buildData, firstChildIndex + 1, depth + 1, maxDepth);
     }
 
     private static Vector3 GetTriangleMin(RayTracedMesh.Triangle triangle)
@@ -109,7 +129,7 @@ public class BVH
     }
     
     private static float EvaluateSplitCost(
-        RayTracedMesh.Triangle[] triangles,
+        TriangleBuildData[] buildData,
         Node node,
         int axis,
         float splitPosition)
@@ -129,11 +149,11 @@ public class BVH
 
         for (int i = node.startIndex; i < endIndex; i++)
         {
-            var triangle = triangles[i];
+            var triangleData = buildData[i];
 
-            var center = GetTriangleCenter(triangle);
-            var triangleMin = GetTriangleMin(triangle);
-            var triangleMax = GetTriangleMax(triangle);
+            var center = triangleData.center;
+            var triangleMin = triangleData.boundsMin;
+            var triangleMax = triangleData.boundsMax;
 
             if (center[axis] < splitPosition)
             {
@@ -160,7 +180,7 @@ public class BVH
     }
     
     private static bool TryFindBestSplit(
-        RayTracedMesh.Triangle[] triangles,
+        TriangleBuildData[] buildData,
         Node node,
         out int axis,
         out float splitPosition)
@@ -186,7 +206,7 @@ public class BVH
                     size[candidateAxis] * fraction;
 
                 float cost = EvaluateSplitCost(
-                    triangles,
+                    buildData,
                     node,
                     candidateAxis,
                     position);

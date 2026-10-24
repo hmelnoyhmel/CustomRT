@@ -8,10 +8,9 @@ public class RayTracedMesh : MonoBehaviour
     public MeshFilter meshFilter;
     public int triangleCount;
 
+    private Mesh builtMesh;
+    
     [SerializeField, HideInInspector] bool materialInitFlag;
-
-    public Vector3[] worldPositions;
-    public Vector3[] worldNormals;
 
     public struct Triangle
     {
@@ -42,7 +41,9 @@ public class RayTracedMesh : MonoBehaviour
         }
         
         meshFilter = GetComponent<MeshFilter>();
-        SetupGeometry();
+        
+        if (bvh == null || builtMesh != meshFilter.sharedMesh)
+            SetupGeometry();
     }
 
     public void SetupGeometry()
@@ -53,50 +54,33 @@ public class RayTracedMesh : MonoBehaviour
         var normals = mesh.normals;
         var indices = mesh.triangles;
         
-        var localToWorld = meshFilter.transform.localToWorldMatrix;
-        
-        worldPositions = new Vector3[vertices.Length];
-
-        for (int i = 0; i < vertices.Length; i++)
-        {
-            worldPositions[i] = localToWorld.MultiplyPoint3x4(vertices[i]);
-        }
-        
-        var normalMatrix = localToWorld.inverse.transpose;
-        worldNormals = new Vector3[normals.Length];
-        
-        for (int i = 0; i < normals.Length; i++)
-        {
-            worldNormals[i] = normalMatrix.MultiplyVector(normals[i]).normalized;
-        }
-
         triangles = new Triangle[indices.Length / 3];
-
+        
         for (int i = 0; i < triangles.Length; i++)
         {
             var a = indices[i * 3];
             var b = indices[i * 3 + 1];
             var c = indices[i * 3 + 2];
 
-            triangles[i].posA = worldPositions[a];
-            triangles[i].normalA = worldNormals[a];
-            
-            triangles[i].posB = worldPositions[b];
-            triangles[i].normalB = worldNormals[b];
-            
-            triangles[i].posC = worldPositions[c];
-            triangles[i].normalC = worldNormals[c];
+            triangles[i].posA = vertices[a];
+            triangles[i].normalA = normals[a];
+
+            triangles[i].posB = vertices[b];
+            triangles[i].normalB = normals[b];
+
+            triangles[i].posC = vertices[c];
+            triangles[i].normalC = normals[c];
         }
         
         triangleCount = triangles.Length;
 
-        boundsMin = worldPositions[0];
-        boundsMax = worldPositions[0];
+        boundsMin = vertices[0];
+        boundsMax = vertices[0];
 
-        for (int i = 0; i < worldPositions.Length; i++)
+        for (int i = 1; i < vertices.Length; i++)
         {
-            boundsMin = Vector3.Min(boundsMin, worldPositions[i]);
-            boundsMax = Vector3.Max(boundsMax, worldPositions[i]);
+            boundsMin = Vector3.Min(boundsMin, vertices[i]);
+            boundsMax = Vector3.Max(boundsMax, vertices[i]);
         }
 
 #if UNITY_EDITOR
@@ -106,6 +90,7 @@ public class RayTracedMesh : MonoBehaviour
 #endif
         
         bvh = new BVH(triangles);
+        builtMesh = mesh;
         
 #if UNITY_EDITOR
         if (timer != null)
@@ -116,6 +101,23 @@ public class RayTracedMesh : MonoBehaviour
         }
         
         Stats = null;
+#endif
+    }
+    
+    internal void UseGeometryFrom(RayTracedMesh source)
+    {
+        Debug.Assert(source.builtMesh == meshFilter.sharedMesh);
+
+        triangles = source.triangles;
+        bvh = source.bvh;
+        builtMesh = source.builtMesh;
+
+        triangleCount = source.triangleCount;
+        boundsMin = source.boundsMin;
+        boundsMax = source.boundsMax;
+
+#if UNITY_EDITOR
+        Stats = source.Stats;
 #endif
     }
 }

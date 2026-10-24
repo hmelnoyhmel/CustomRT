@@ -40,6 +40,9 @@ struct MeshInfo
     float3 boundsMin;
     float3 boundsMax;
     RayTracingMaterial material;
+    
+    float4x4 localToWorld;
+    float4x4 worldToLocal;
 };
 
 struct BVHNode

@@ -19,11 +19,12 @@ public static class BVHDebug
     private static void DrawBVH(RayTracedMesh targetMesh, GizmoType gizmoType)
     {
         if (!drawAll && (gizmoType & GizmoType.Selected) == 0) return;
-        if (targetMesh == null) return;
+        if (targetMesh == null || targetMesh.meshFilter == null) return;
         
         var bvh = targetMesh.Bvh;
         if (bvh == null || bvh.Tree.Count == 0) return;
 
+        Gizmos.matrix = targetMesh.meshFilter.transform.localToWorldMatrix;
         for (int i = 0; i < bvh.Tree.Count; i++)
         {
             var node = bvh.Tree[i];

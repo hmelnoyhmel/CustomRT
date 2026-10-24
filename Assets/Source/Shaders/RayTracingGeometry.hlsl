@@ -17,7 +17,12 @@ HitInfo RayTriangle(Ray ray, Triangle tri, float maxDistance)
     float3 edgeAC = tri.posC - tri.posA;
     float3 edgeCross = cross(edgeAB, edgeAC);
     float determinant = -dot(ray.dir, edgeCross);
-    if (determinant < 1E-6) return hitInfo;
+    if (determinant <= 0) return hitInfo;
+    
+    /*float determinantScaleSquared = dot(ray.dir, ray.dir) * dot(edgeCross, edgeCross);
+
+    if (determinant * determinant <= 1E-12 * determinantScaleSquared)
+        return hitInfo;*/
     
     float3 originOffset = ray.origin - tri.posA;
     float invDeterminant = 1 / determinant;
@@ -55,22 +60,49 @@ bool RayBoundingBox(Ray ray, float3 boxMin, float3 boxMax, float3 inverseRayDire
     
     // check for tFar >= 0 so ray doesn't consider objects behind camera
     return tNear < maxDistance && tNear <= tFar && tFar >= 0; 
-};
+}
+
+Ray TransformRayToLocal(Ray ray, MeshInfo meshInfo)
+{
+    // mirrored transforms need a separate back-face culling check.
+    Ray localRay;
+    localRay.origin = mul(
+        meshInfo.worldToLocal, float4(ray.origin, 1.0)).xyz;
+
+    localRay.dir = mul(
+        meshInfo.worldToLocal, float4(ray.dir, 0.0)).xyz;
+
+    return localRay;
+}
+
+HitInfo TransformHitToWorld(HitInfo hitInfo, MeshInfo meshInfo)
+{
+    hitInfo.hitPoint = mul(
+        meshInfo.localToWorld, float4(hitInfo.hitPoint, 1.0)).xyz;
+
+    hitInfo.normal = normalize(mul(
+        transpose((float3x3)meshInfo.worldToLocal),
+        hitInfo.normal));
+
+    return hitInfo;
+}
 
 HitInfo CalculateRayCollisionFullTraversal(Ray ray)
 {
     HitInfo closestHit = (HitInfo)0;
     closestHit.distance = 1.#INF; // if ray didn't hit, the distance is inf
 
-    // calculate once before loop, because each individual ray is the same for all meshes 
-    // (but ray bounces will require recalculation)
-    float3 inverseRayDirection = 1.0 / ray.dir; 
+    
     float meshEntryDistance;
     
     for (int meshIndex = 0; meshIndex < NumMeshes; meshIndex++)
     {
         MeshInfo meshInfo = AllMeshInfo[meshIndex];
-        if (!RayBoundingBox(ray, meshInfo.boundsMin, meshInfo.boundsMax, 
+        
+        Ray localRay = TransformRayToLocal(ray, meshInfo);
+        float3 inverseRayDirection = 1.0 / localRay.dir;
+        
+        if (!RayBoundingBox(localRay, meshInfo.boundsMin, meshInfo.boundsMax, 
             inverseRayDirection, closestHit.distance, meshEntryDistance))
             continue;
 
@@ -78,11 +110,11 @@ HitInfo CalculateRayCollisionFullTraversal(Ray ray)
         {
             int triIndex = meshInfo.firstTriangleIndex + i;
             Triangle tri = Triangles[triIndex];
-            HitInfo hitInfo = RayTriangle(ray, tri, closestHit.distance);
+            HitInfo hitInfo = RayTriangle(localRay, tri, closestHit.distance);
 
             if (hitInfo.didHit && hitInfo.distance < closestHit.distance)
             {
-                closestHit = hitInfo;
+                closestHit = TransformHitToWorld(hitInfo, meshInfo);
                 closestHit.material = meshInfo.material;
             }
         }
@@ -90,122 +122,146 @@ HitInfo CalculateRayCollisionFullTraversal(Ray ray)
     return closestHit;
 }
 
+void IntersectLeafTriangles(Ray ray, MeshInfo meshInfo, BVHNode node, inout HitInfo closestHit)
+{
+    uint firstTriangleIndex = meshInfo.firstTriangleIndex + node.startIndex;
+
+    [loop]
+    for (uint i = 0; i < node.triangleCount; i++)
+    {
+        Triangle tri = Triangles[firstTriangleIndex + i];
+        HitInfo hitInfo = RayTriangle(ray, tri, closestHit.distance);
+
+        if (hitInfo.didHit && hitInfo.distance < closestHit.distance)
+        {
+            closestHit = hitInfo;
+            closestHit.material = meshInfo.material;
+        }
+    }
+}
+
+void TraverseMeshBVH(
+    Ray ray,
+    MeshInfo meshInfo,
+    float3 inverseRayDirection,
+    inout HitInfo closestHit)
+{
+    if (meshInfo.numTriangles == 0) return;
+        
+    uint rootIndex = meshInfo.firstNodeIndex;
+    BVHNode root = BVHNodes[rootIndex];
+
+    float rootEntryDistance;
+
+    if (!RayBoundingBox(ray, root.boundsMin,root.boundsMax, inverseRayDirection,closestHit.distance, rootEntryDistance))
+        return;
+    
+    // supports maxDepth <= 31;
+    // increase stack capacity if the depth limit grows.
+    uint stack[32];
+    float stackEntryDistances[32];
+    uint stackCount = 1;
+    stack[0] = rootIndex;
+    stackEntryDistances[0] = rootEntryDistance;
+    
+    [loop]
+    while (stackCount > 0)
+    {
+        stackCount--;
+        
+        uint nodeIndex = stack[stackCount];
+        float entryDistance = stackEntryDistances[stackCount];
+        if (entryDistance >= closestHit.distance) continue;
+        
+        BVHNode node = BVHNodes[nodeIndex];
+
+        if (node.triangleCount == 0)
+        {
+            uint leftIndex = meshInfo.firstNodeIndex + node.startIndex;
+            uint rightIndex = leftIndex + 1;
+
+            BVHNode leftNode = BVHNodes[leftIndex];
+            BVHNode rightNode = BVHNodes[rightIndex];
+
+            float leftEntryDistance;
+            float rightEntryDistance;
+
+            bool hitLeft = RayBoundingBox(
+                ray,
+                leftNode.boundsMin,
+                leftNode.boundsMax,
+                inverseRayDirection,
+                closestHit.distance,
+                leftEntryDistance);
+
+            bool hitRight = RayBoundingBox(
+                ray,
+                rightNode.boundsMin,
+                rightNode.boundsMax,
+                inverseRayDirection,
+                closestHit.distance,
+                rightEntryDistance);
+
+            if (hitLeft && hitRight)
+            {
+                bool leftIsNear = leftEntryDistance <= rightEntryDistance;
+
+                uint nearIndex = leftIsNear ? leftIndex : rightIndex;
+                uint farIndex = leftIsNear ? rightIndex : leftIndex;
+
+                stack[stackCount] = farIndex;
+                stackEntryDistances[stackCount] = leftIsNear ? rightEntryDistance : leftEntryDistance;
+                stackCount++;
+
+                stack[stackCount] = nearIndex;
+                stackEntryDistances[stackCount] = leftIsNear ? leftEntryDistance : rightEntryDistance;
+                stackCount++;
+            }
+            else
+            {
+                if (hitLeft)
+                {
+                    stack[stackCount] = leftIndex;
+                    stackEntryDistances[stackCount] = leftEntryDistance;
+                    stackCount++;
+                }
+
+                if (hitRight)
+                {
+                    stack[stackCount] = rightIndex;
+                    stackEntryDistances[stackCount] = rightEntryDistance;
+                    stackCount++;
+                }
+            }
+
+            continue;
+        }
+
+        IntersectLeafTriangles(ray, meshInfo, node, closestHit);
+    }
+}
+
 HitInfo CalculateRayCollision(Ray ray)
 {
     HitInfo closestHit = (HitInfo)0;
     closestHit.distance = 1.#INF;
-
-    float3 inverseRayDirection = 1.0 / ray.dir;
 
     for (int meshIndex = 0; meshIndex < NumMeshes; meshIndex++)
     {
         MeshInfo meshInfo = AllMeshInfo[meshIndex];
         if (meshInfo.numTriangles == 0) continue;
         
-        uint rootIndex = meshInfo.firstNodeIndex;
-        BVHNode root = BVHNodes[rootIndex];
-
-        float rootEntryDistance;
-
-        if (!RayBoundingBox(ray, root.boundsMin,root.boundsMax,inverseRayDirection,closestHit.distance, rootEntryDistance))
-            continue;
+        Ray localRay = TransformRayToLocal(ray, meshInfo);
+        float3 inverseRayDirection = 1.0 / localRay.dir;
         
-        // supports maxDepth <= 31;
-        // increase stack capacity if the depth limit grows.
-        uint stack[32];
-        float stackEntryDistances[32];
-        uint stackCount = 1;
-        stack[0] = rootIndex;
-        stackEntryDistances[0] = rootEntryDistance;
+        HitInfo meshHit = (HitInfo)0;
+        meshHit.distance = closestHit.distance;
         
-        [loop]
-        while (stackCount > 0)
-        {
-            stackCount--;
-            
-            uint nodeIndex = stack[stackCount];
-            float entryDistance = stackEntryDistances[stackCount];
-            if (entryDistance >= closestHit.distance) continue;
-            
-            BVHNode node = BVHNodes[nodeIndex];
-
-            if (node.triangleCount == 0)
-            {
-                uint leftIndex = meshInfo.firstNodeIndex + node.startIndex;
-                uint rightIndex = leftIndex + 1;
-
-                BVHNode leftNode = BVHNodes[leftIndex];
-                BVHNode rightNode = BVHNodes[rightIndex];
-
-                float leftEntryDistance;
-                float rightEntryDistance;
-
-                bool hitLeft = RayBoundingBox(
-                    ray,
-                    leftNode.boundsMin,
-                    leftNode.boundsMax,
-                    inverseRayDirection,
-                    closestHit.distance,
-                    leftEntryDistance);
-
-                bool hitRight = RayBoundingBox(
-                    ray,
-                    rightNode.boundsMin,
-                    rightNode.boundsMax,
-                    inverseRayDirection,
-                    closestHit.distance,
-                    rightEntryDistance);
-
-                if (hitLeft && hitRight)
-                {
-                    bool leftIsNear = leftEntryDistance <= rightEntryDistance;
-
-                    uint nearIndex = leftIsNear ? leftIndex : rightIndex;
-                    uint farIndex = leftIsNear ? rightIndex : leftIndex;
-
-                    stack[stackCount] = farIndex;
-                    stackEntryDistances[stackCount] = leftIsNear ? rightEntryDistance : leftEntryDistance;
-                    stackCount++;
-
-                    stack[stackCount] = nearIndex;
-                    stackEntryDistances[stackCount] = leftIsNear ? leftEntryDistance : rightEntryDistance;
-                    stackCount++;
-                }
-                else
-                {
-                    if (hitLeft)
-                    {
-                        stack[stackCount] = leftIndex;
-                        stackEntryDistances[stackCount] = leftEntryDistance;
-                        stackCount++;
-                    }
-
-                    if (hitRight)
-                    {
-                        stack[stackCount] = rightIndex;
-                        stackEntryDistances[stackCount] = rightEntryDistance;
-                        stackCount++;
-                    }
-                }
-
-                continue;
-            }
-
-            uint firstTriangleIndex = meshInfo.firstTriangleIndex + node.startIndex;
-
-            [loop]
-            for (uint i = 0; i < node.triangleCount; i++)
-            {
-                Triangle tri = Triangles[firstTriangleIndex + i];
-                HitInfo hitInfo = RayTriangle(ray, tri, closestHit.distance);
-
-                if (hitInfo.didHit && hitInfo.distance < closestHit.distance)
-                {
-                    closestHit = hitInfo;
-                    closestHit.material = meshInfo.material;
-                }
-            }
-        }
+        TraverseMeshBVH(localRay, meshInfo, inverseRayDirection, meshHit);
+        
+        if (!meshHit.didHit) continue;
+        
+        closestHit = TransformHitToWorld(meshHit, meshInfo);
     }
 
     return closestHit;
